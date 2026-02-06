@@ -2,11 +2,12 @@ print("BOT FILE STARTED")
 
 import os
 import subprocess
-from aiogram import Bot, Dispatcher, executor, types
-from config import TOKEN
+from config import BOT_TOKEN
+from aiogram import Bot, Dispatcher
 
-bot = Bot(token=TOKEN)
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
+
 
 DOWNLOAD_DIR = "downloads"
 
@@ -87,4 +88,5 @@ async def downloader(message: types.Message):
 
     with open(file_path, "rb") as f:
         await message.answer_do_
+
 
