@@ -30,18 +30,18 @@ async def downloader(message: types.Message):
 
     output_path = f"{DOWNLOAD_DIR}/video.mp4"
 
-    cmd = [
-        "python",
-        "-m",
-        "yt_dlp",
-        "-f",
-        "bestvideo+bestaudio/best",
-        "--merge-output-format",
-        "mp4",
-        "-o",
-        output_path,
-        url
-    ]
+   cmd = [
+    "python",
+    "-m",
+    "yt_dlp",
+    "-f",
+    "bv*+ba/b",
+    "--merge-output-format", "mp4",
+    "--remux-video", "mp4",
+    "--force-overwrites",
+    "-o", output_path,
+    url
+]
 
     try:
         subprocess.run(cmd, check=True)
