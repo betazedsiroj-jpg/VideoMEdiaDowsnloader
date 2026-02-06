@@ -31,14 +31,16 @@ async def downloader(message: types.Message):
     output_path = f"{DOWNLOAD_DIR}/video.mp4"
 
     cmd = [
-        "yt-dlp",
-        "-f", "bestvideo+bestaudio/best",
-"--merge-output-format", "mp4",
-        "-o", output_path,
-        url
-    ]
+    "yt-dlp",
+    "-f", "bestvideo+bestaudio/best",
+    "-S", "res:1080",
+    "--merge-output-format", "mp4",
+    "-o", output_path,
+    url
+]
 
-    subprocess.run(cmd)
+subprocess.run(cmd, check=True)
+
 
     if not os.path.exists(output_path):
         await message.answer("❌ Ошибка скачивания")
@@ -62,4 +64,5 @@ async def downloader(message: types.Message):
 
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
+
 
