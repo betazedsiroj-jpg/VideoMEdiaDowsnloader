@@ -32,8 +32,8 @@ async def downloader(message: types.Message):
 
     cmd = [
         "yt-dlp",
-        "-f", "bv*[ext=mp4][height<=1080]+ba/best",
-        "--merge-output-format", "mp4",
+        "-f", "bestvideo+bestaudio/best",
+"--merge-output-format", "mp4",
         "-o", output_path,
         url
     ]
@@ -62,3 +62,4 @@ async def downloader(message: types.Message):
 
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
+
