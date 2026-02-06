@@ -91,8 +91,15 @@ async def downloader(message: types.Message):
         os.remove(file_path)
         return
 
-    with open(file_path, "rb") as f:
-        await message.answer_do_
+with open(file_path, "rb") as f:
+    await message.answer_document(f)
+
+
+from aiogram import executor
+
+if __name__ == "__main__":
+    executor.start_polling(dp, skip_updates=True)
+
 
 
 
