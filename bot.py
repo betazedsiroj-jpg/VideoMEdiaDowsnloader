@@ -3,9 +3,6 @@ import subprocess
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
 
-print("BOT FILE STARTED")
-
-# ===== TOKEN =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 if not BOT_TOKEN:
@@ -17,37 +14,32 @@ dp = Dispatcher(bot)
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# ===== /start =====
+
 @dp.message_handler(commands=["start"])
-async def start(message: types.Message):
+async def start_cmd(message: types.Message):
     await message.answer("👋 Пришли ссылку на видео")
 
-# ===== Downloader =====
+
 @dp.message_handler()
 async def downloader(message: types.Message):
     url = message.text.strip()
+
     await message.answer("⏳ Скачиваю...")
 
     output_path = f"{DOWNLOAD_DIR}/video.mp4"
 
-   cmd = [
-    "python",
-    "-m",
-    "yt_dlp",
-    "-f",
-    "bv*+ba/b",
-    "--merge-output-format", "mp4",
-    "--remux-video", "mp4",
-    "--force-overwrites",
-    "-o", output_path,
-    url
-]
+    cmd = [
+        "yt-dlp",
+        "-f", "bv*+ba/best",
+        "--merge-output-format", "mp4",
+        "-o", output_path,
+        url
+    ]
 
     try:
         subprocess.run(cmd, check=True)
     except Exception as e:
-        await message.answer("❌ Ошибка скачивания")
-        print(e)
+        await message.answer(f"❌ Ошибка скачивания\n{e}")
         return
 
     if not os.path.exists(output_path):
@@ -58,17 +50,17 @@ async def downloader(message: types.Message):
 
     if size_mb > 45:
         await message.answer(
-            "❌ Видео больше 45MB\n"
-            f"Скачай вручную:\n{url}"
+            "❌ Видео слишком большое для Telegram\n"
+            f"Скачай напрямую:\n{url}"
         )
         os.remove(output_path)
         return
 
-    with open(output_path, "rb") as video:
-        await message.answer_video(video)
+    with open(output_path, "rb") as f:
+        await message.answer_document(f)
 
     os.remove(output_path)
 
-# ===== START BOT =====
+
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
