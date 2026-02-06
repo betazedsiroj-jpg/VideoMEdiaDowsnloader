@@ -1,9 +1,9 @@
+print("BOT FILE STARTED")
+
 import os
 import subprocess
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
-
-print("BOT FILE STARTED")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
@@ -31,16 +31,14 @@ async def downloader(message: types.Message):
     output_path = f"{DOWNLOAD_DIR}/video.mp4"
 
     cmd = [
-    "yt-dlp",
-    "-f", "bestvideo+bestaudio/best",
-    "-S", "res:1080",
-    "--merge-output-format", "mp4",
-    "-o", output_path,
-    url
-]
+        "yt-dlp",
+        "-f", "bv*[height<=1080]+ba/best",
+        "--merge-output-format", "mp4",
+        "-o", output_path,
+        url
+    ]
 
-subprocess.run(cmd, check=True)
-
+    subprocess.run(cmd)
 
     if not os.path.exists(output_path):
         await message.answer("❌ Ошибка скачивания")
@@ -64,5 +62,3 @@ subprocess.run(cmd, check=True)
 
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
-
-
