@@ -1,6 +1,7 @@
-print("BOT FILE STARTED")
+
 
 import os
+print("ENV TOKEN:", os.getenv("BOT_TOKEN"))
 import subprocess
 from config import BOT_TOKEN
 from aiogram import Bot, Dispatcher, types
@@ -92,6 +93,7 @@ async def downloader(message: types.Message):
 
     with open(file_path, "rb") as f:
         await message.answer_do_
+
 
 
 
