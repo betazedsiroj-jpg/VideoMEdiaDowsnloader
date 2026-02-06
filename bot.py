@@ -5,8 +5,12 @@ import subprocess
 from config import BOT_TOKEN
 from aiogram import Bot, Dispatcher, types
 
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN is not set")
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
+
 
 
 DOWNLOAD_DIR = "downloads"
@@ -88,6 +92,7 @@ async def downloader(message: types.Message):
 
     with open(file_path, "rb") as f:
         await message.answer_do_
+
 
 
 
