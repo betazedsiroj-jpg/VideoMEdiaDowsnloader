@@ -1,10 +1,11 @@
-
-
 import os
-print("ENV TOKEN:", os.getenv("BOT_TOKEN"))
 import subprocess
-from config import BOT_TOKEN
 from aiogram import Bot, Dispatcher, types
+from aiogram.utils import executor
+
+print("BOT FILE STARTED")
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN is not set")
@@ -12,96 +13,52 @@ if not BOT_TOKEN:
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
-
-
 DOWNLOAD_DIR = "downloads"
-
-if not os.path.exists(DOWNLOAD_DIR):
-    os.mkdir(DOWNLOAD_DIR)
-
-
-def is_youtube_long(url: str):
-    return "youtube.com/watch" in url or "youtu.be/" in url
-
-
-def is_short_platform(url: str):
-    url = url.lower()
-    return (
-        "instagram.com" in url or
-        "facebook.com" in url or
-        "pinterest.com" in url or
-        "youtube.com/shorts" in url
-    )
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 
 @dp.message_handler(commands=["start"])
-async def start_cmd(message: types.Message):
-    await message.answer(
-        "👋 Отправь ссылку.\n\n"
-        "• Shorts / Reels / Pinterest / Facebook → получишь видео\n"
-        "• Обычный YouTube → получишь ссылку на скачивание"
-    )
+async def start(message: types.Message):
+    await message.answer("👋 Пришли ссылку на видео")
 
 
-@dp.message_handler(lambda message: message.text.startswith("http"))
+@dp.message_handler()
 async def downloader(message: types.Message):
     url = message.text.strip()
 
-    # Обычный YouTube
-    if is_youtube_long(url):
-        await message.answer(
-            "📥 Это длинное YouTube видео.\n"
-            "Telegram не позволяет отправлять такие большие файлы.\n\n"
-            f"Скачай напрямую:\n{url}"
-        )
-        return
+    await message.answer("⏳ Скачиваю...")
 
-    # Shorts / Reels
-    if not is_short_platform(url):
-        await message.answer("❌ Платформа не поддерживается.")
-        return
+    output_path = f"{DOWNLOAD_DIR}/video.mp4"
 
-    await message.answer("⏳ Скачиваю видео...")
-
-    # очистка папки
-    for f in os.listdir(DOWNLOAD_DIR):
-        os.remove(os.path.join(DOWNLOAD_DIR, f))
-
-    subprocess.run([
+    cmd = [
         "yt-dlp",
-        "-f", "bv*[ext=mp4][height<=1080]+ba[ext=m4a]/best",
+        "-f", "bv*[ext=mp4][height<=1080]+ba/best",
         "--merge-output-format", "mp4",
-        "-o", f"{DOWNLOAD_DIR}/video.mp4",
+        "-o", output_path,
         url
-    ])
+    ]
 
-    file_path = f"{DOWNLOAD_DIR}/video.mp4"
+    subprocess.run(cmd)
 
-    if not os.path.exists(file_path):
-        await message.answer("❌ Ошибка скачивания.")
+    if not os.path.exists(output_path):
+        await message.answer("❌ Ошибка скачивания")
         return
 
-    size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    size_mb = os.path.getsize(output_path) / (1024 * 1024)
 
     if size_mb > 45:
         await message.answer(
-            "❌ Видео слишком большое для Telegram.\n"
+            "❌ Видео слишком большое для Telegram\n"
             f"Скачай напрямую:\n{url}"
         )
-        os.remove(file_path)
+        os.remove(output_path)
         return
 
-with open(file_path, "rb") as f:
-    await message.answer_document(f)
+    with open(output_path, "rb") as f:
+        await message.answer_document(f)
 
+    os.remove(output_path)
 
-from aiogram import executor
 
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
-
-
-
-
-
-
