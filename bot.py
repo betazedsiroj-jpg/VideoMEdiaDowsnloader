@@ -81,4 +81,4 @@ async def downloader(message: types.Message):
 
 if __name__ == "__main__":
     print("🚀 BOT STARTED")
-    executor.start_polling(dp, skip_updates=True)
+    executor.start_polling(dp, skip_updates=True) 
