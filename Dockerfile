@@ -7,5 +7,6 @@ WORKDIR /app
 COPY . .
 
 RUN pip install -r requirements.txt
+RUN yt-dlp -U
 
 CMD ["python", "bot.py"]
