@@ -18,7 +18,6 @@ GDRIVE_JSON = os.getenv("GDRIVE_JSON")
 # Лимиты размеров (в MB)
 TELEGRAM_VIDEO_LIMIT = 2000  # 2 GB для видео
 TELEGRAM_DOC_LIMIT = 50      # 50 MB для документа
-COMPRESS_THRESHOLD = 2000    # Если больше 2 GB - сжимаем
 
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -95,7 +94,6 @@ async def upload_to_drive(file_path):
 async def compress_video(input_path, output_path, target_size_mb):
     """
     Сжимает видео до нужного размера с минимальной потерей качества
-    Использует двухпроходное кодирование для лучшего результата
     """
     try:
         # Получаем длительность видео
@@ -119,22 +117,22 @@ async def compress_video(input_path, output_path, target_size_mb):
         target_size_bits = target_size_mb * 1024 * 1024 * 8 * 0.95
         target_bitrate = int(target_size_bits / duration)
         
-        # Ограничиваем битрейт (не меньше 500k для качества)
-        video_bitrate = max(target_bitrate - 128000, 500000)  # Оставляем место для аудио
+        # Ограничиваем битрейт
+        video_bitrate = max(target_bitrate - 128000, 500000)
         
-        # Команда сжатия (однопроходное для скорости, но с хорошим качеством)
+        # Команда сжатия
         compress_cmd = [
             "ffmpeg",
             "-i", input_path,
-            "-c:v", "libx264",           # H264 кодек
-            "-b:v", str(video_bitrate),  # Видео битрейт
+            "-c:v", "libx264",
+            "-b:v", str(video_bitrate),
             "-maxrate", str(video_bitrate),
             "-bufsize", str(video_bitrate * 2),
-            "-preset", "medium",         # Баланс скорость/качество
-            "-c:a", "aac",               # AAC аудио
-            "-b:a", "128k",              # Аудио битрейт
-            "-movflags", "+faststart",   # Для быстрой загрузки
-            "-y",                        # Перезаписывать
+            "-preset", "medium",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-movflags", "+faststart",
+            "-y",
             output_path
         ]
         
@@ -168,7 +166,7 @@ async def start(message: types.Message):
         "• Facebook\n\n"
         "📦 До 50 MB — пришлю документом\n"
         "🎬 До 2 GB — пришлю видео\n"
-        "☁️ Больше 2 GB — загружу в Google Drive (если настроен)\n\n"
+        "☁️ Больше 2 GB — загружу в Google Drive\n\n"
         "⚡ Качество максимально сохраняется!"
     )
 
@@ -183,10 +181,11 @@ async def downloader(message: types.Message):
     
     filename_template = f"{DOWNLOAD_DIR}/{user_id}_%(id)s.%(ext)s"
     
-    # Проверяем тип платформы
+    # Определяем платформу
     is_instagram = "instagram.com" in url.lower()
+    is_youtube_shorts = "shorts" in url.lower() or "youtu.be" in url.lower()
     
-    # Команда для yt-dlp
+    # Команда для yt-dlp в зависимости от платформы
     if is_instagram:
         cmd = [
             "yt-dlp",
@@ -195,7 +194,18 @@ async def downloader(message: types.Message):
             "-o", filename_template,
             url
         ]
+    elif is_youtube_shorts:
+        # Для Shorts используем простой формат
+        cmd = [
+            "yt-dlp",
+            "-f", "best",
+            "--no-playlist",
+            "--no-check-certificate",
+            "-o", filename_template,
+            url
+        ]
     else:
+        # Для обычных видео
         cmd = [
             "yt-dlp",
             "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
@@ -212,22 +222,35 @@ async def downloader(message: types.Message):
         # Скачиваем видео
         process = await asyncio.create_subprocess_exec(
             *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
         
-        _, stderr = await asyncio.wait_for(
+        stdout, stderr = await asyncio.wait_for(
             process.communicate(),
             timeout=600  # 10 минут
         )
         
         if process.returncode != 0:
-            error = stderr.decode('utf-8', errors='ignore')
+            error_text = stderr.decode('utf-8', errors='ignore')
             
-            if "login" in error.lower() or "private" in error.lower():
+            # Логируем ошибку для отладки
+            print(f"yt-dlp error for {url}: {error_text[:500]}")
+            
+            if "login" in error_text.lower() or "private" in error_text.lower():
                 await status.edit_text("❌ Аккаунт приватный или требует авторизации")
+            elif "unavailable" in error_text.lower():
+                await status.edit_text("❌ Видео недоступно или удалено")
+            elif "not found" in error_text.lower():
+                await status.edit_text("❌ Видео не найдено\nПроверьте ссылку")
             else:
-                await status.edit_text("❌ Не удалось скачать видео\nПроверьте ссылку")
+                await status.edit_text(
+                    "❌ Не удалось скачать видео\n\n"
+                    "Попробуйте:\n"
+                    "• Проверить ссылку\n"
+                    "• Убедиться что видео публичное\n"
+                    "• Попробовать другое видео"
+                )
             return
         
         # Ищем скачанный файл
@@ -263,7 +286,7 @@ async def downloader(message: types.Message):
             await status.delete()
             return
         
-        # СЦЕНАРИЙ 3: Большое видео (больше 2 GB) - сжимаем до 2 GB
+        # СЦЕНАРИЙ 3: Большое видео (больше 2 GB) - сжимаем
         else:
             await status.edit_text(
                 f"🗜️ Видео большое ({size_mb:.1f} MB)\n"
@@ -294,8 +317,7 @@ async def downloader(message: types.Message):
                 # Если сжатие не удалось - пробуем Google Drive
                 if drive:
                     await status.edit_text(
-                        f"☁️ Сжатие не удалось\n"
-                        f"Загружаю в Google Drive ({size_mb:.1f} MB)..."
+                        f"☁️ Загружаю в Google Drive ({size_mb:.1f} MB)..."
                     )
                     
                     try:
@@ -305,11 +327,11 @@ async def downloader(message: types.Message):
                             f"✅ Видео загружено в Google Drive!\n\n"
                             f"📦 Размер: {size_mb:.1f} MB\n"
                             f"🔗 Ссылка:\n{drive_link}\n\n"
-                            f"💡 Оригинальное качество, можно скачать или смотреть онлайн"
+                            f"💡 Оригинальное качество"
                         )
                         return
                     
-                    except Exception as drive_error:
+                    except Exception:
                         await status.edit_text(
                             f"❌ Не удалось обработать видео\n\n"
                             f"Размер: {size_mb:.1f} MB (слишком большой)\n"
@@ -328,7 +350,9 @@ async def downloader(message: types.Message):
         await status.edit_text("❌ Превышено время ожидания (10 мин)")
     
     except Exception as e:
-        await status.edit_text(f"❌ Произошла ошибка:\n{str(e)[:300]}")
+        error_msg = str(e)[:300]
+        print(f"Error downloading {url}: {error_msg}")
+        await status.edit_text(f"❌ Произошла ошибка:\n{error_msg}")
     
     finally:
         # Всегда очищаем файлы пользователя
