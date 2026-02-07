@@ -6,11 +6,15 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Обновляем pip и устанавливаем Python пакеты
 WORKDIR /app
 
+# Копируем requirements
 COPY requirements.txt .
+
+# Обновляем pip и устанавливаем зависимости
+# ВАЖНО: обновляем yt-dlp до последней версии
 RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -U yt-dlp && \
     pip install --no-cache-dir -r requirements.txt
 
 # Копируем бота
