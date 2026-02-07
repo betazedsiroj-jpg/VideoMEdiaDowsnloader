@@ -1,12 +1,10 @@
-FROM python:3.11-slim
+# Соберите образ
+docker build -f Dockerfile_drive -t video-bot-drive .
 
-RUN apt-get update && apt-get install -y ffmpeg
-
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-CMD ["python", "bot.py"]
+# Запустите
+docker run -d \
+  --name video-bot \
+  -e BOT_TOKEN="ваш_токен" \
+  -e GDRIVE_JSON='{"type":"service_account"...}' \
+  --restart unless-stopped \
+  video-bot-drive
