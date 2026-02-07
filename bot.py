@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import glob
+import aiohttp
 from concurrent.futures import ThreadPoolExecutor
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
@@ -67,6 +68,45 @@ async def upload_to_drive(file_path):
     return await loop.run_in_executor(executor_pool, upload_to_drive_sync, file_path)
 
 # =========================
+# GOFILE
+# =========================
+async def upload_to_gofile(file_path):
+    """Загрузка файла на GoFile"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Получаем сервер
+            async with session.get("https://api.gofile.io/getServer") as response:
+                if response.status != 200:
+                    raise Exception("Не удалось получить сервер GoFile")
+                
+                server_data = await response.json()
+                if server_data['status'] != 'ok':
+                    raise Exception("Ошибка API GoFile")
+                
+                server = server_data['data']['server']
+            
+            # Загружаем файл
+            with open(file_path, 'rb') as f:
+                data = aiohttp.FormData()
+                data.add_field('file', f, filename=os.path.basename(file_path))
+                
+                async with session.post(
+                    f"https://{server}.gofile.io/uploadFile",
+                    data=data
+                ) as response:
+                    if response.status != 200:
+                        raise Exception("Ошибка загрузки на GoFile")
+                    
+                    result = await response.json()
+                    if result['status'] != 'ok':
+                        raise Exception("Ошибка ответа GoFile")
+                    
+                    return result['data']['downloadPage']
+    
+    except Exception as e:
+        raise Exception(f"GoFile ошибка: {str(e)}")
+
+# =========================
 # СЖАТИЕ ВИДЕО
 # =========================
 async def compress_video(input_path, output_path, target_mb):
@@ -118,9 +158,9 @@ async def start(message: types.Message):
         "• Instagram / Reels\n"
         "• TikTok / Facebook\n\n"
         "🎬 До 2 GB — отправлю видео\n"
-        "☁️ Больше 2 GB — загружу в Google Drive\n"
-        "🗜️ Без Drive — попробую сжать\n\n"
-        "⚡ Качество сохраняется!"
+        "☁️ Больше 2 GB — загружу на GoFile\n\n"
+        "⚡ Качество сохраняется!\n"
+        "🆓 GoFile бесплатный и без лимитов"
     )
 
 # =========================
@@ -200,52 +240,71 @@ async def download_video(message: types.Message):
             
             await status.delete()
         
-        # Больше 2 GB - приоритет Google Drive
+        # Больше 2 GB - загружаем на GoFile
         else:
-            # Вариант 1: Google Drive (если настроен)
-            if drive:
-                await status.edit_text(f"☁️ Загружаю в Google Drive ({size_mb:.1f} MB)...")
-                
-                try:
-                    link = await upload_to_drive(file_path)
-                    await status.edit_text(
-                        f"✅ Загружено в Google Drive!\n\n"
-                        f"📦 Размер: {size_mb:.1f} MB\n"
-                        f"🔗 Ссылка:\n{link}\n\n"
-                        f"💡 Оригинальное качество без потерь"
-                    )
-                    return
-                except Exception as drive_error:
-                    print(f"Drive error: {drive_error}")
-                    await status.edit_text(f"⚠️ Ошибка загрузки в Drive\nПробую сжать...")
+            await status.edit_text(f"☁️ Загружаю на GoFile ({size_mb:.1f} MB)...")
             
-            # Вариант 2: Сжатие до 2 GB
-            await status.edit_text(f"🗜️ Сжимаю видео ({size_mb:.1f} MB → 2 GB)...")
-            
-            compressed = f"{DOWNLOAD_DIR}/{user_id}_compressed.mp4"
-            
-            if await compress_video(file_path, compressed, TELEGRAM_VIDEO_LIMIT):
-                comp_size = os.path.getsize(compressed) / (1024 * 1024)
+            try:
+                # Пробуем GoFile (без лимитов, бесплатно)
+                link = await upload_to_gofile(file_path)
                 
-                await status.edit_text(f"📤 Отправляю ({comp_size:.1f} MB)...")
-                
-                with open(compressed, "rb") as video:
-                    await message.answer_video(
-                        video,
-                        caption=f"🎬 {comp_size:.1f} MB | Сжато из {size_mb:.1f} MB",
-                        supports_streaming=True
-                    )
-                
-                await status.delete()
-            
-            # Вариант 3: Не получилось
-            else:
                 await status.edit_text(
-                    f"❌ Видео слишком большое: {size_mb:.1f} MB\n\n"
-                    f"Telegram лимит: 2 GB\n"
-                    f"Google Drive: {'не настроен' if not drive else 'ошибка'}\n\n"
-                    f"Скачай напрямую:\n{url}"
+                    f"✅ Загружено на GoFile!\n\n"
+                    f"📦 Размер: {size_mb:.1f} MB\n"
+                    f"🔗 Ссылка:\n{link}\n\n"
+                    f"💡 Оригинальное качество\n"
+                    f"⏬ Можно скачать прямо сейчас"
                 )
+                return
+            
+            except Exception as gofile_error:
+                print(f"GoFile error: {gofile_error}")
+                
+                # Если GoFile не сработал - пробуем Google Drive
+                if drive:
+                    await status.edit_text(f"☁️ Загружаю в Google Drive ({size_mb:.1f} MB)...")
+                    
+                    try:
+                        link = await upload_to_drive(file_path)
+                        await status.edit_text(
+                            f"✅ Загружено в Google Drive!\n\n"
+                            f"📦 Размер: {size_mb:.1f} MB\n"
+                            f"🔗 Ссылка:\n{link}\n\n"
+                            f"💡 Оригинальное качество"
+                        )
+                        return
+                    except Exception as drive_error:
+                        print(f"Drive error: {drive_error}")
+                        await status.edit_text(f"⚠️ Ошибка загрузки\nПробую сжать...")
+                
+                # Последний вариант - сжатие
+                await status.edit_text(f"🗜️ Сжимаю видео ({size_mb:.1f} MB → 2 GB)...")
+                
+                compressed = f"{DOWNLOAD_DIR}/{user_id}_compressed.mp4"
+                
+                if await compress_video(file_path, compressed, TELEGRAM_VIDEO_LIMIT):
+                    comp_size = os.path.getsize(compressed) / (1024 * 1024)
+                    
+                    await status.edit_text(f"📤 Отправляю ({comp_size:.1f} MB)...")
+                    
+                    with open(compressed, "rb") as video:
+                        await message.answer_video(
+                            video,
+                            caption=f"🎬 {comp_size:.1f} MB | Сжато из {size_mb:.1f} MB",
+                            supports_streaming=True
+                        )
+                    
+                    await status.delete()
+                
+                # Не получилось ничего
+                else:
+                    await status.edit_text(
+                        f"❌ Видео слишком большое: {size_mb:.1f} MB\n\n"
+                        f"Telegram лимит: 2 GB\n"
+                        f"GoFile: ошибка\n"
+                        f"Google Drive: {'не настроен' if not drive else 'ошибка'}\n\n"
+                        f"Скачай напрямую:\n{url}"
+                    )
     
     except asyncio.TimeoutError:
         await status.edit_text("❌ Таймаут (10 мин)")
