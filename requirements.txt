@@ -1,5 +1,4 @@
 aiogram==2.25.1
-yt-dlp
 google-auth
 google-auth-oauthlib
 google-auth-httplib2
