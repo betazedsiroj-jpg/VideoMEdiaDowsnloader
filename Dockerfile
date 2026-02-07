@@ -7,17 +7,11 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Обновляем pip и устанавливаем Python пакеты
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir \
-    yt-dlp \
-    aiogram==2.25.1 \
-    google-auth \
-    google-auth-oauthlib \
-    google-auth-httplib2 \
-    google-api-python-client
-
-# Рабочая директория
 WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Копируем бота
 COPY bot.py .
