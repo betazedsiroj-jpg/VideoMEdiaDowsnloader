@@ -1,1 +1,4 @@
 gdrive.json
+__pycache__/
+downloads/
+.env
