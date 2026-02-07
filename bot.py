@@ -164,8 +164,7 @@ async def start(message: types.Message):
         "• Instagram / Reels\n"
         "• TikTok\n"
         "• Facebook\n\n"
-        "📦 До 50 MB — пришлю документом\n"
-        "🎬 До 2 GB — пришлю видео\n"
+        "🎬 До 2 GB — пришлю видео в Telegram\n"
         "☁️ Больше 2 GB — загружу в Google Drive\n\n"
         "⚡ Качество максимально сохраняется!"
     )
@@ -262,18 +261,8 @@ async def downloader(message: types.Message):
         file_path = files[0]
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
         
-        # СЦЕНАРИЙ 1: Маленькое видео (до 50 MB) - отправляем документом
-        if size_mb <= TELEGRAM_DOC_LIMIT:
-            await status.edit_text(f"📤 Отправляю документ ({size_mb:.1f} MB)...")
-            
-            with open(file_path, "rb") as video:
-                await message.answer_document(video, caption=f"📦 {size_mb:.1f} MB")
-            
-            await status.delete()
-            return
-        
-        # СЦЕНАРИЙ 2: Среднее видео (50 MB - 2 GB) - отправляем видео
-        elif size_mb <= TELEGRAM_VIDEO_LIMIT:
+        # СЦЕНАРИЙ 1: Видео до 2 GB - отправляем видео
+        if size_mb <= TELEGRAM_VIDEO_LIMIT:
             await status.edit_text(f"🎬 Отправляю видео ({size_mb:.1f} MB)...")
             
             with open(file_path, "rb") as video:
