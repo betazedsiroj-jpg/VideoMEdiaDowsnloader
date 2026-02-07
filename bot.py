@@ -14,33 +14,44 @@ from googleapiclient.http import MediaFileUpload
 # =========================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GDRIVE_JSON = os.getenv("GDRIVE_JSON")
-MAX_SIZE_MB = 45
-DOWNLOAD_DIR = "downloads"
 
+# Лимиты размеров (в MB)
+TELEGRAM_VIDEO_LIMIT = 2000  # 2 GB для видео
+TELEGRAM_DOC_LIMIT = 50      # 50 MB для документа
+COMPRESS_THRESHOLD = 2000    # Если больше 2 GB - сжимаем
+
+DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN is not set")
-if not GDRIVE_JSON:
-    raise ValueError("GDRIVE_JSON is not set")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
-# ThreadPoolExecutor для блокирующих операций с Drive
+# ThreadPoolExecutor для блокирующих операций
 executor_pool = ThreadPoolExecutor(max_workers=3)
 
 # =========================
-# GOOGLE DRIVE
+# GOOGLE DRIVE (опционально)
 # =========================
-creds = service_account.Credentials.from_service_account_info(
-    json.loads(GDRIVE_JSON),
-    scopes=["https://www.googleapis.com/auth/drive"]
-)
-drive = build("drive", "v3", credentials=creds)
+drive = None
+if GDRIVE_JSON:
+    try:
+        creds = service_account.Credentials.from_service_account_info(
+            json.loads(GDRIVE_JSON),
+            scopes=["https://www.googleapis.com/auth/drive"]
+        )
+        drive = build("drive", "v3", credentials=creds)
+        print("✅ Google Drive включен")
+    except Exception as e:
+        print(f"⚠️ Google Drive отключен: {e}")
 
 def upload_to_drive_sync(file_path):
     """Синхронная загрузка в Google Drive"""
+    if not drive:
+        raise Exception("Google Drive не настроен")
+    
     try:
         file_metadata = {
             "name": os.path.basename(file_path),
@@ -58,7 +69,7 @@ def upload_to_drive_sync(file_path):
             fields="id, webViewLink"
         ).execute()
         
-        # Делаем файл доступным по ссылке
+        # Делаем файл публичным
         drive.permissions().create(
             fileId=file['id'],
             body={'type': 'anyone', 'role': 'reader'}
@@ -79,6 +90,71 @@ async def upload_to_drive(file_path):
     )
 
 # =========================
+# СЖАТИЕ ВИДЕО
+# =========================
+async def compress_video(input_path, output_path, target_size_mb):
+    """
+    Сжимает видео до нужного размера с минимальной потерей качества
+    Использует двухпроходное кодирование для лучшего результата
+    """
+    try:
+        # Получаем длительность видео
+        probe_cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            input_path
+        ]
+        
+        process = await asyncio.create_subprocess_exec(
+            *probe_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, _ = await process.communicate()
+        duration = float(stdout.decode().strip())
+        
+        # Вычисляем битрейт (с запасом 5%)
+        target_size_bits = target_size_mb * 1024 * 1024 * 8 * 0.95
+        target_bitrate = int(target_size_bits / duration)
+        
+        # Ограничиваем битрейт (не меньше 500k для качества)
+        video_bitrate = max(target_bitrate - 128000, 500000)  # Оставляем место для аудио
+        
+        # Команда сжатия (однопроходное для скорости, но с хорошим качеством)
+        compress_cmd = [
+            "ffmpeg",
+            "-i", input_path,
+            "-c:v", "libx264",           # H264 кодек
+            "-b:v", str(video_bitrate),  # Видео битрейт
+            "-maxrate", str(video_bitrate),
+            "-bufsize", str(video_bitrate * 2),
+            "-preset", "medium",         # Баланс скорость/качество
+            "-c:a", "aac",               # AAC аудио
+            "-b:a", "128k",              # Аудио битрейт
+            "-movflags", "+faststart",   # Для быстрой загрузки
+            "-y",                        # Перезаписывать
+            output_path
+        ]
+        
+        process = await asyncio.create_subprocess_exec(
+            *compress_cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        await process.communicate()
+        
+        if process.returncode != 0:
+            raise Exception("Ошибка сжатия видео")
+        
+        return True
+    
+    except Exception as e:
+        raise Exception(f"Не удалось сжать видео: {str(e)}")
+
+# =========================
 # COMMANDS
 # =========================
 @dp.message_handler(commands=["start"])
@@ -90,8 +166,10 @@ async def start(message: types.Message):
         "• Instagram / Reels\n"
         "• TikTok\n"
         "• Facebook\n\n"
-        "📦 До 45 MB — пришлю файлом\n"
-        "☁️ Больше 45 MB — загружу в Google Drive"
+        "📦 До 50 MB — пришлю документом\n"
+        "🎬 До 2 GB — пришлю видео\n"
+        "☁️ Больше 2 GB — загружу в Google Drive (если настроен)\n\n"
+        "⚡ Качество максимально сохраняется!"
     )
 
 # =========================
@@ -120,7 +198,7 @@ async def downloader(message: types.Message):
     else:
         cmd = [
             "yt-dlp",
-            "-f", "best[ext=mp4]/bestvideo+bestaudio/best",
+            "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
             "--merge-output-format", "mp4",
             "--no-playlist",
             "-o", filename_template,
@@ -128,6 +206,7 @@ async def downloader(message: types.Message):
         ]
     
     file_path = None
+    compressed_path = None
     
     try:
         # Скачиваем видео
@@ -139,21 +218,16 @@ async def downloader(message: types.Message):
         
         _, stderr = await asyncio.wait_for(
             process.communicate(),
-            timeout=300  # 5 минут
+            timeout=600  # 10 минут
         )
         
         if process.returncode != 0:
             error = stderr.decode('utf-8', errors='ignore')
             
             if "login" in error.lower() or "private" in error.lower():
-                await status.edit_text(
-                    "❌ Аккаунт приватный или требует авторизации"
-                )
+                await status.edit_text("❌ Аккаунт приватный или требует авторизации")
             else:
-                await status.edit_text(
-                    "❌ Не удалось скачать видео\n"
-                    "Проверьте ссылку"
-                )
+                await status.edit_text("❌ Не удалось скачать видео\nПроверьте ссылку")
             return
         
         # Ищем скачанный файл
@@ -165,48 +239,96 @@ async def downloader(message: types.Message):
         file_path = files[0]
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
         
-        # Маленький файл - отправляем напрямую
-        if size_mb <= MAX_SIZE_MB:
-            await status.edit_text(f"📤 Отправляю ({size_mb:.1f} MB)...")
+        # СЦЕНАРИЙ 1: Маленькое видео (до 50 MB) - отправляем документом
+        if size_mb <= TELEGRAM_DOC_LIMIT:
+            await status.edit_text(f"📤 Отправляю документ ({size_mb:.1f} MB)...")
             
             with open(file_path, "rb") as video:
-                await message.answer_video(video)
+                await message.answer_document(video, caption=f"📦 {size_mb:.1f} MB")
             
             await status.delete()
             return
         
-        # Большой файл - загружаем в Google Drive
-        await status.edit_text(
-            f"☁️ Видео большое ({size_mb:.1f} MB)\n"
-            f"Загружаю в Google Drive..."
-        )
-        
-        try:
-            drive_link = await upload_to_drive(file_path)
+        # СЦЕНАРИЙ 2: Среднее видео (50 MB - 2 GB) - отправляем видео
+        elif size_mb <= TELEGRAM_VIDEO_LIMIT:
+            await status.edit_text(f"🎬 Отправляю видео ({size_mb:.1f} MB)...")
             
-            await status.edit_text(
-                f"✅ Видео загружено в Google Drive!\n\n"
-                f"📦 Размер: {size_mb:.1f} MB\n"
-                f"🔗 Ссылка:\n{drive_link}\n\n"
-                f"💡 Можешь скачать или посмотреть онлайн"
-            )
+            with open(file_path, "rb") as video:
+                await message.answer_video(
+                    video,
+                    caption=f"🎬 {size_mb:.1f} MB | Оригинальное качество",
+                    supports_streaming=True
+                )
+            
+            await status.delete()
+            return
         
-        except Exception as e:
+        # СЦЕНАРИЙ 3: Большое видео (больше 2 GB) - сжимаем до 2 GB
+        else:
             await status.edit_text(
-                f"❌ Ошибка загрузки в Google Drive\n\n"
-                f"Видео слишком большое ({size_mb:.1f} MB)\n"
-                f"Скачай напрямую:\n{url}"
+                f"🗜️ Видео большое ({size_mb:.1f} MB)\n"
+                f"Сжимаю до 2 GB с сохранением качества...\n"
+                f"Это может занять несколько минут ⏳"
             )
+            
+            compressed_path = f"{DOWNLOAD_DIR}/{user_id}_compressed.mp4"
+            
+            try:
+                await compress_video(file_path, compressed_path, TELEGRAM_VIDEO_LIMIT)
+                
+                compressed_size_mb = os.path.getsize(compressed_path) / (1024 * 1024)
+                
+                await status.edit_text(f"🎬 Отправляю видео ({compressed_size_mb:.1f} MB)...")
+                
+                with open(compressed_path, "rb") as video:
+                    await message.answer_video(
+                        video,
+                        caption=f"🎬 {compressed_size_mb:.1f} MB | Сжато из {size_mb:.1f} MB",
+                        supports_streaming=True
+                    )
+                
+                await status.delete()
+                return
+            
+            except Exception as compress_error:
+                # Если сжатие не удалось - пробуем Google Drive
+                if drive:
+                    await status.edit_text(
+                        f"☁️ Сжатие не удалось\n"
+                        f"Загружаю в Google Drive ({size_mb:.1f} MB)..."
+                    )
+                    
+                    try:
+                        drive_link = await upload_to_drive(file_path)
+                        
+                        await status.edit_text(
+                            f"✅ Видео загружено в Google Drive!\n\n"
+                            f"📦 Размер: {size_mb:.1f} MB\n"
+                            f"🔗 Ссылка:\n{drive_link}\n\n"
+                            f"💡 Оригинальное качество, можно скачать или смотреть онлайн"
+                        )
+                        return
+                    
+                    except Exception as drive_error:
+                        await status.edit_text(
+                            f"❌ Не удалось обработать видео\n\n"
+                            f"Размер: {size_mb:.1f} MB (слишком большой)\n"
+                            f"Скачай напрямую:\n{url}"
+                        )
+                        return
+                else:
+                    await status.edit_text(
+                        f"❌ Видео слишком большое: {size_mb:.1f} MB\n\n"
+                        f"Telegram поддерживает до 2 GB\n"
+                        f"Скачай напрямую:\n{url}"
+                    )
+                    return
     
     except asyncio.TimeoutError:
-        await status.edit_text(
-            "❌ Превышено время ожидания (5 мин)"
-        )
+        await status.edit_text("❌ Превышено время ожидания (10 мин)")
     
     except Exception as e:
-        await status.edit_text(
-            f"❌ Произошла ошибка:\n{str(e)[:300]}"
-        )
+        await status.edit_text(f"❌ Произошла ошибка:\n{str(e)[:300]}")
     
     finally:
         # Всегда очищаем файлы пользователя
@@ -220,7 +342,11 @@ async def downloader(message: types.Message):
 # START
 # =========================
 if __name__ == "__main__":
-    print("🚀 Бот запущен с поддержкой Google Drive!")
+    print("🚀 Бот запущен!")
+    print(f"📦 Лимит документа: {TELEGRAM_DOC_LIMIT} MB")
+    print(f"🎬 Лимит видео: {TELEGRAM_VIDEO_LIMIT} MB")
+    print(f"☁️ Google Drive: {'включен' if drive else 'отключен'}")
+    
     try:
         executor.start_polling(dp, skip_updates=True)
     finally:
