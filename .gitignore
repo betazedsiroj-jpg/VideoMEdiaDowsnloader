@@ -1,4 +1,20 @@
-gdrive.json
-__pycache__/
-downloads/
+# Секреты
 .env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+
+# Временные файлы
+downloads/
+*.log
+
+# IDE
+.vscode/
+.idea/
