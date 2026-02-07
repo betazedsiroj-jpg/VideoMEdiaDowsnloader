@@ -118,7 +118,8 @@ async def start(message: types.Message):
         "• Instagram / Reels\n"
         "• TikTok / Facebook\n\n"
         "🎬 До 2 GB — отправлю видео\n"
-        "☁️ Больше 2 GB — загружу в Drive\n\n"
+        "☁️ Больше 2 GB — загружу в Google Drive\n"
+        "🗜️ Без Drive — попробую сжать\n\n"
         "⚡ Качество сохраняется!"
     )
 
@@ -199,9 +200,27 @@ async def download_video(message: types.Message):
             
             await status.delete()
         
-        # Больше 2 GB - сжимаем
+        # Больше 2 GB - приоритет Google Drive
         else:
-            await status.edit_text(f"🗜️ Сжимаю ({size_mb:.1f} MB → 2 GB)...")
+            # Вариант 1: Google Drive (если настроен)
+            if drive:
+                await status.edit_text(f"☁️ Загружаю в Google Drive ({size_mb:.1f} MB)...")
+                
+                try:
+                    link = await upload_to_drive(file_path)
+                    await status.edit_text(
+                        f"✅ Загружено в Google Drive!\n\n"
+                        f"📦 Размер: {size_mb:.1f} MB\n"
+                        f"🔗 Ссылка:\n{link}\n\n"
+                        f"💡 Оригинальное качество без потерь"
+                    )
+                    return
+                except Exception as drive_error:
+                    print(f"Drive error: {drive_error}")
+                    await status.edit_text(f"⚠️ Ошибка загрузки в Drive\nПробую сжать...")
+            
+            # Вариант 2: Сжатие до 2 GB
+            await status.edit_text(f"🗜️ Сжимаю видео ({size_mb:.1f} MB → 2 GB)...")
             
             compressed = f"{DOWNLOAD_DIR}/{user_id}_compressed.mp4"
             
@@ -213,31 +232,20 @@ async def download_video(message: types.Message):
                 with open(compressed, "rb") as video:
                     await message.answer_video(
                         video,
-                        caption=f"🎬 {comp_size:.1f} MB (сжато)",
+                        caption=f"🎬 {comp_size:.1f} MB | Сжато из {size_mb:.1f} MB",
                         supports_streaming=True
                     )
                 
                 await status.delete()
             
-            # Если сжатие не помогло - Drive
-            elif drive:
-                await status.edit_text(f"☁️ Загружаю в Drive ({size_mb:.1f} MB)...")
-                
-                try:
-                    link = await upload_to_drive(file_path)
-                    await status.edit_text(
-                        f"✅ Загружено!\n\n"
-                        f"📦 {size_mb:.1f} MB\n"
-                        f"🔗 {link}"
-                    )
-                except Exception:
-                    await status.edit_text(
-                        f"❌ Слишком большой файл\n"
-                        f"Скачай напрямую: {url}"
-                    )
-            
+            # Вариант 3: Не получилось
             else:
-                await status.edit_text(f"❌ Видео {size_mb:.1f} MB (лимит 2 GB)")
+                await status.edit_text(
+                    f"❌ Видео слишком большое: {size_mb:.1f} MB\n\n"
+                    f"Telegram лимит: 2 GB\n"
+                    f"Google Drive: {'не настроен' if not drive else 'ошибка'}\n\n"
+                    f"Скачай напрямую:\n{url}"
+                )
     
     except asyncio.TimeoutError:
         await status.edit_text("❌ Таймаут (10 мин)")
