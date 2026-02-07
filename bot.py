@@ -1,84 +1,95 @@
 import os
-import subprocess
+import asyncio
+import glob
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
 
-# ===== НАСТРОЙКИ =====
-
+# === TOKEN ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN is not set")
-
-DOWNLOAD_DIR = "downloads"
-MAX_SIZE_MB = 45
-
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-
-# ===== BOT =====
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
-# ===== START =====
+# === SETTINGS ===
+DOWNLOAD_DIR = "downloads"
+MAX_SIZE_MB = 45
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+
+# === START ===
 @dp.message_handler(commands=["start"])
 async def start_cmd(message: types.Message):
     await message.answer(
-        "👋 Отправь ссылку на видео\n"
-        "YouTube / Shorts / Instagram / TikTok / Facebook\n\n"
-        "Видео до 45MB пришлю файлом\n"
+        "👋 Отправь ссылку на видео\n\n"
+        "YouTube / Shorts / Instagram / TikTok / Facebook\n"
+        "До 45MB — пришлю файлом\n"
         "Больше 45MB — дам ссылку"
     )
 
-# ===== DOWNLOAD HANDLER =====
 
+# === DOWNLOADER ===
 @dp.message_handler()
 async def downloader(message: types.Message):
-
     url = message.text.strip()
-    await message.answer("⏳ Скачиваю...")
+    user_id = message.from_user.id
 
-    output_path = f"{DOWNLOAD_DIR}/video.mp4"
+    status = await message.answer("⏳ Скачиваю...")
+
+    filename = f"{DOWNLOAD_DIR}/{user_id}_video.mp4"
 
     cmd = [
         "yt-dlp",
-        "-f", "bv*[height<=720]+ba/best",
-        "--merge-output-format", "mp4",
-        "-o", output_path,
+        "-f", "best[ext=mp4]/best",
+        "--no-playlist",
+        "-o", filename,
         url
     ]
 
     try:
-        subprocess.run(cmd, check=True)
-    except Exception:
-        await message.answer("❌ Ошибка при скачивании")
-        return
-
-    if not os.path.exists(output_path):
-        await message.answer("❌ Видео не найдено")
-        return
-
-    size_mb = os.path.getsize(output_path) / (1024 * 1024)
-
-    # если больше лимита
-    if size_mb > MAX_SIZE_MB:
-        await message.answer(
-            "⚠️ Видео больше 45MB\n"
-            "Скачай по ссылке:\n"
-            f"{url}"
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE
         )
-        os.remove(output_path)
-        return
 
-    # если влазит
-    with open(output_path, "rb") as video:
-        await message.answer_document(video)
+        _, stderr = await process.communicate()
 
-    os.remove(output_path)
+        if process.returncode != 0:
+            await status.edit_text(
+                "❌ Ошибка при скачивании\n"
+                "Возможно ссылка приватная или защищена"
+            )
+            return
 
-# ===== RUN =====
+        if not os.path.exists(filename):
+            await status.edit_text("❌ Видео не найдено")
+            return
 
+        size_mb = os.path.getsize(filename) / (1024 * 1024)
+
+        if size_mb > MAX_SIZE_MB:
+            await status.edit_text(
+                f"❌ Видео слишком большое: {size_mb:.1f} MB\n\n"
+                f"Вот ссылка для скачивания:\n{url}"
+            )
+            os.remove(filename)
+            return
+
+        await status.edit_text("📤 Отправляю видео...")
+
+        with open(filename, "rb") as video:
+            await message.answer_document(video)
+
+        os.remove(filename)
+        await status.delete()
+
+    except Exception as e:
+        await status.edit_text(f"❌ Ошибка: {str(e)[:200]}")
+
+
+# === RUN ===
 if __name__ == "__main__":
     print("🚀 BOT STARTED")
-    executor.start_polling(dp, skip_updates=True) 
+    executor.start_polling(dp, skip_updates=True)
