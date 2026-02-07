@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Устанавливаем системные зависимости
+# Системные зависимости
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
@@ -8,20 +8,17 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Копируем requirements
+# Python зависимости
 COPY requirements.txt .
-
-# Обновляем pip и устанавливаем зависимости
-# ВАЖНО: обновляем yt-dlp до последней версии
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -U yt-dlp && \
     pip install --no-cache-dir -r requirements.txt
 
-# Копируем бота
+# Код бота
 COPY bot.py .
 
-# Создаем папку для скачивания
+# Папка для скачивания
 RUN mkdir -p downloads
 
-# Запускаем бота
+# Запуск
 CMD ["python", "-u", "bot.py"]
