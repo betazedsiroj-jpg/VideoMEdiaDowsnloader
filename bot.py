@@ -227,6 +227,42 @@ async def download_video(message: types.Message):
         file_path = files[0]
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
         
+        # Проверяем формат и конвертируем если нужно
+        file_ext = os.path.splitext(file_path)[1].lower()
+        needs_conversion = file_ext not in ['.mp4'] or is_shorts or is_instagram
+        
+        # Если нужна конвертация в правильный MP4
+        if needs_conversion and size_mb <= TELEGRAM_VIDEO_LIMIT:
+            await status.edit_text(f"🔄 Конвертирую в MP4 ({size_mb:.1f} MB)...")
+            
+            converted_path = f"{DOWNLOAD_DIR}/{user_id}_converted.mp4"
+            
+            # Конвертируем в совместимый формат
+            convert_cmd = [
+                "ffmpeg", "-i", file_path,
+                "-c:v", "libx264",          # H264 видео кодек
+                "-preset", "fast",          # Быстрая конвертация
+                "-crf", "23",               # Качество (18-28, меньше=лучше)
+                "-c:a", "aac",              # AAC аудио кодек
+                "-b:a", "128k",             # Битрейт аудио
+                "-movflags", "+faststart",  # Для стриминга
+                "-y",
+                converted_path
+            ]
+            
+            conv_process = await asyncio.create_subprocess_exec(
+                *convert_cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            await conv_process.communicate()
+            
+            # Если конвертация успешна - используем новый файл
+            if conv_process.returncode == 0 and os.path.exists(converted_path):
+                file_path = converted_path
+                size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        
         # До 2 GB - отправляем как видео
         if size_mb <= TELEGRAM_VIDEO_LIMIT:
             await status.edit_text(f"📤 Отправляю ({size_mb:.1f} MB)...")
