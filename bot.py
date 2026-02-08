@@ -6,6 +6,7 @@ import aiohttp
 from concurrent.futures import ThreadPoolExecutor
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -27,6 +28,9 @@ if not BOT_TOKEN:
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 executor_pool = ThreadPoolExecutor(max_workers=3)
+
+# Храним выбор пользователей {user_id: url}
+user_urls = {}
 
 # =========================
 # GOOGLE DRIVE
@@ -71,10 +75,8 @@ async def upload_to_drive(file_path):
 # GOFILE
 # =========================
 async def upload_to_gofile(file_path):
-    """Загрузка файла на GoFile"""
     try:
         async with aiohttp.ClientSession() as session:
-            # Получаем сервер
             async with session.get("https://api.gofile.io/getServer") as response:
                 if response.status != 200:
                     raise Exception("Не удалось получить сервер GoFile")
@@ -85,7 +87,6 @@ async def upload_to_gofile(file_path):
                 
                 server = server_data['data']['server']
             
-            # Загружаем файл
             with open(file_path, 'rb') as f:
                 data = aiohttp.FormData()
                 data.add_field('file', f, filename=os.path.basename(file_path))
@@ -111,7 +112,6 @@ async def upload_to_gofile(file_path):
 # =========================
 async def compress_video(input_path, output_path, target_mb):
     try:
-        # Получаем длительность
         probe = await asyncio.create_subprocess_exec(
             "ffprobe", "-v", "error",
             "-show_entries", "format=duration",
@@ -122,11 +122,9 @@ async def compress_video(input_path, output_path, target_mb):
         stdout, _ = await probe.communicate()
         duration = float(stdout.decode().strip())
         
-        # Вычисляем битрейт
         target_bits = target_mb * 1024 * 1024 * 8 * 0.95
         bitrate = max(int(target_bits / duration) - 128000, 500000)
         
-        # Сжимаем
         process = await asyncio.create_subprocess_exec(
             "ffmpeg", "-i", input_path,
             "-c:v", "libx264",
@@ -157,20 +155,53 @@ async def start(message: types.Message):
         "• YouTube / Shorts\n"
         "• Instagram / Reels\n"
         "• TikTok / Facebook\n\n"
-        "🎬 До 2 GB — отправлю видео\n"
-        "☁️ Больше 2 GB — загружу на GoFile\n\n"
-        "⚡ Качество сохраняется!\n"
-        "🆓 GoFile бесплатный и без лимитов"
+        "🎬 Выбор качества: 360p, 720p, 1080p\n"
+        "🎵 Можно скачать только аудио\n"
+        "☁️ Большие файлы → GoFile\n\n"
+        "⚡ Качество на твой выбор!"
     )
 
 # =========================
-# СКАЧИВАНИЕ
+# ОБРАБОТКА ССЫЛКИ
 # =========================
 @dp.message_handler()
-async def download_video(message: types.Message):
+async def handle_url(message: types.Message):
     url = message.text.strip()
     user_id = message.from_user.id
-    status = await message.answer("⏳ Скачиваю...")
+    
+    # Сохраняем URL пользователя
+    user_urls[user_id] = url
+    
+    # Создаём меню выбора качества
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("🎵 Только аудио", callback_data="quality_audio"),
+        InlineKeyboardButton("📱 360p", callback_data="quality_360"),
+        InlineKeyboardButton("📺 720p", callback_data="quality_720"),
+        InlineKeyboardButton("🖥️ 1080p", callback_data="quality_1080"),
+        InlineKeyboardButton("⭐ Лучшее", callback_data="quality_best")
+    )
+    
+    await message.answer(
+        "🎯 Выбери качество:",
+        reply_markup=keyboard
+    )
+
+# =========================
+# ОБРАБОТКА ВЫБОРА КАЧЕСТВА
+# =========================
+@dp.callback_query_handler(lambda c: c.data.startswith('quality_'))
+async def process_quality(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    quality = callback.data.replace('quality_', '')
+    
+    # Получаем URL пользователя
+    url = user_urls.get(user_id)
+    if not url:
+        await callback.answer("❌ Ссылка не найдена. Отправьте заново.")
+        return
+    
+    await callback.message.edit_text("⏳ Скачиваю...")
     
     template = f"{DOWNLOAD_DIR}/{user_id}_%(id)s.%(ext)s"
     
@@ -178,20 +209,32 @@ async def download_video(message: types.Message):
     is_instagram = "instagram.com" in url.lower()
     is_shorts = "shorts" in url.lower() or "youtu.be" in url.lower()
     
-    # Формируем команду
+    # Формат для yt-dlp в зависимости от качества
+    if quality == "audio":
+        format_str = "bestaudio/best"
+        template = f"{DOWNLOAD_DIR}/{user_id}_%(id)s.%(ext)s"
+    elif quality == "360":
+        format_str = "bestvideo[height<=360]+bestaudio/best[height<=360]"
+    elif quality == "720":
+        format_str = "bestvideo[height<=720]+bestaudio/best[height<=720]"
+    elif quality == "1080":
+        format_str = "bestvideo[height<=1080]+bestaudio/best[height<=1080]"
+    else:  # best
+        format_str = "bestvideo+bestaudio/best"
+    
+    # Команда для yt-dlp
     if is_instagram:
         cmd = [
             "yt-dlp", "--no-playlist",
             "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "-f", format_str,
             "-o", template, url
         ]
-    elif is_shorts:
-        cmd = ["yt-dlp", "-f", "best", "--no-playlist", "-o", template, url]
     else:
         cmd = [
             "yt-dlp",
-            "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-            "--merge-output-format", "mp4",
+            "-f", format_str,
+            "--merge-output-format", "mp4" if quality != "audio" else "m4a",
             "--no-playlist",
             "-o", template, url
         ]
@@ -211,143 +254,117 @@ async def download_video(message: types.Message):
             print(f"Ошибка для {url}: {error[:500]}")
             
             if "private" in error.lower() or "login" in error.lower():
-                await status.edit_text("❌ Видео приватное или требует авторизации")
+                await callback.message.edit_text("❌ Видео приватное или требует авторизации")
             elif "unavailable" in error.lower():
-                await status.edit_text("❌ Видео недоступно или удалено")
+                await callback.message.edit_text("❌ Видео недоступно или удалено")
             else:
-                await status.edit_text("❌ Не удалось скачать\nПроверьте ссылку")
+                await callback.message.edit_text("❌ Не удалось скачать\nПроверьте ссылку")
             return
         
         # Ищем файл
         files = glob.glob(f"{DOWNLOAD_DIR}/{user_id}_*")
         if not files:
-            await status.edit_text("❌ Файл не найден")
+            await callback.message.edit_text("❌ Файл не найден")
             return
         
         file_path = files[0]
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
         
-        # Проверяем формат и конвертируем если нужно
-        file_ext = os.path.splitext(file_path)[1].lower()
-        needs_conversion = file_ext not in ['.mp4'] or is_shorts or is_instagram
-        
-        # Если нужна конвертация в правильный MP4
-        if needs_conversion and size_mb <= TELEGRAM_VIDEO_LIMIT:
-            await status.edit_text(f"🔄 Конвертирую в MP4 ({size_mb:.1f} MB)...")
+        # Если аудио - отправляем как аудио
+        if quality == "audio":
+            await callback.message.edit_text(f"📤 Отправляю аудио ({size_mb:.1f} MB)...")
             
-            converted_path = f"{DOWNLOAD_DIR}/{user_id}_converted.mp4"
+            with open(file_path, "rb") as audio:
+                await callback.message.answer_audio(
+                    audio,
+                    caption=f"🎵 Аудио | {size_mb:.1f} MB"
+                )
             
-            # Конвертируем в совместимый формат
-            convert_cmd = [
-                "ffmpeg", "-i", file_path,
-                "-c:v", "libx264",          # H264 видео кодек
-                "-preset", "fast",          # Быстрая конвертация
-                "-crf", "23",               # Качество (18-28, меньше=лучше)
-                "-c:a", "aac",              # AAC аудио кодек
-                "-b:a", "128k",             # Битрейт аудио
-                "-movflags", "+faststart",  # Для стриминга
-                "-y",
-                converted_path
-            ]
-            
-            conv_process = await asyncio.create_subprocess_exec(
-                *convert_cmd,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            await conv_process.communicate()
-            
-            # Если конвертация успешна - используем новый файл
-            if conv_process.returncode == 0 and os.path.exists(converted_path):
-                file_path = converted_path
-                size_mb = os.path.getsize(file_path) / (1024 * 1024)
+            await callback.message.delete()
         
         # До 2 GB - отправляем как видео
-        if size_mb <= TELEGRAM_VIDEO_LIMIT:
-            await status.edit_text(f"📤 Отправляю ({size_mb:.1f} MB)...")
+        elif size_mb <= TELEGRAM_VIDEO_LIMIT:
+            await callback.message.edit_text(f"📤 Отправляю ({size_mb:.1f} MB)...")
+            
+            # Конвертируем в правильный формат если нужно
+            file_ext = os.path.splitext(file_path)[1].lower()
+            if file_ext not in ['.mp4']:
+                converted_path = f"{DOWNLOAD_DIR}/{user_id}_converted.mp4"
+                
+                convert_cmd = [
+                    "ffmpeg", "-i", file_path,
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                    "-c:a", "aac", "-b:a", "128k",
+                    "-movflags", "+faststart",
+                    "-y", converted_path
+                ]
+                
+                conv_process = await asyncio.create_subprocess_exec(
+                    *convert_cmd,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                
+                await conv_process.communicate()
+                
+                if conv_process.returncode == 0 and os.path.exists(converted_path):
+                    file_path = converted_path
+                    size_mb = os.path.getsize(file_path) / (1024 * 1024)
             
             with open(file_path, "rb") as video:
-                await message.answer_video(
+                await callback.message.answer_video(
                     video,
-                    caption=f"🎬 {size_mb:.1f} MB",
+                    caption=f"🎬 {quality.upper()} | {size_mb:.1f} MB",
                     supports_streaming=True
                 )
             
-            await status.delete()
+            await callback.message.delete()
         
-        # Больше 2 GB - загружаем на GoFile
+        # Больше 2 GB - GoFile
         else:
-            await status.edit_text(f"☁️ Загружаю на GoFile ({size_mb:.1f} MB)...")
+            await callback.message.edit_text(f"☁️ Загружаю на GoFile ({size_mb:.1f} MB)...")
             
             try:
-                # Пробуем GoFile (без лимитов, бесплатно)
                 link = await upload_to_gofile(file_path)
                 
-                await status.edit_text(
+                await callback.message.edit_text(
                     f"✅ Загружено на GoFile!\n\n"
+                    f"📦 Качество: {quality.upper()}\n"
                     f"📦 Размер: {size_mb:.1f} MB\n"
                     f"🔗 Ссылка:\n{link}\n\n"
-                    f"💡 Оригинальное качество\n"
-                    f"⏬ Можно скачать прямо сейчас"
+                    f"💡 Оригинальное качество"
                 )
-                return
             
             except Exception as gofile_error:
                 print(f"GoFile error: {gofile_error}")
                 
-                # Если GoFile не сработал - пробуем Google Drive
                 if drive:
-                    await status.edit_text(f"☁️ Загружаю в Google Drive ({size_mb:.1f} MB)...")
+                    await callback.message.edit_text(f"☁️ Загружаю в Google Drive ({size_mb:.1f} MB)...")
                     
                     try:
                         link = await upload_to_drive(file_path)
-                        await status.edit_text(
+                        await callback.message.edit_text(
                             f"✅ Загружено в Google Drive!\n\n"
                             f"📦 Размер: {size_mb:.1f} MB\n"
-                            f"🔗 Ссылка:\n{link}\n\n"
-                            f"💡 Оригинальное качество"
+                            f"🔗 {link}"
                         )
-                        return
-                    except Exception as drive_error:
-                        print(f"Drive error: {drive_error}")
-                        await status.edit_text(f"⚠️ Ошибка загрузки\nПробую сжать...")
-                
-                # Последний вариант - сжатие
-                await status.edit_text(f"🗜️ Сжимаю видео ({size_mb:.1f} MB → 2 GB)...")
-                
-                compressed = f"{DOWNLOAD_DIR}/{user_id}_compressed.mp4"
-                
-                if await compress_video(file_path, compressed, TELEGRAM_VIDEO_LIMIT):
-                    comp_size = os.path.getsize(compressed) / (1024 * 1024)
-                    
-                    await status.edit_text(f"📤 Отправляю ({comp_size:.1f} MB)...")
-                    
-                    with open(compressed, "rb") as video:
-                        await message.answer_video(
-                            video,
-                            caption=f"🎬 {comp_size:.1f} MB | Сжато из {size_mb:.1f} MB",
-                            supports_streaming=True
+                    except Exception:
+                        await callback.message.edit_text(
+                            f"❌ Не удалось загрузить\n"
+                            f"Скачай напрямую: {url}"
                         )
-                    
-                    await status.delete()
-                
-                # Не получилось ничего
                 else:
-                    await status.edit_text(
-                        f"❌ Видео слишком большое: {size_mb:.1f} MB\n\n"
-                        f"Telegram лимит: 2 GB\n"
-                        f"GoFile: ошибка\n"
-                        f"Google Drive: {'не настроен' if not drive else 'ошибка'}\n\n"
-                        f"Скачай напрямую:\n{url}"
+                    await callback.message.edit_text(
+                        f"❌ Файл слишком большой: {size_mb:.1f} MB\n"
+                        f"Скачай напрямую: {url}"
                     )
     
     except asyncio.TimeoutError:
-        await status.edit_text("❌ Таймаут (10 мин)")
+        await callback.message.edit_text("❌ Таймаут (10 мин)")
     
     except Exception as e:
         print(f"Ошибка: {e}")
-        await status.edit_text(f"❌ Ошибка: {str(e)[:200]}")
+        await callback.message.edit_text(f"❌ Ошибка: {str(e)[:200]}")
     
     finally:
         # Удаляем файлы
@@ -356,12 +373,16 @@ async def download_video(message: types.Message):
                 os.remove(f)
             except:
                 pass
+        
+        # Очищаем сохранённый URL
+        if user_id in user_urls:
+            del user_urls[user_id]
 
 # =========================
 # ЗАПУСК
 # =========================
 if __name__ == "__main__":
-    print("🚀 Бот запущен!")
+    print("🚀 Бот запущен с выбором качества!")
     print(f"🎬 Лимит: {TELEGRAM_VIDEO_LIMIT} MB")
     print(f"☁️ Drive: {'Да' if drive else 'Нет'}")
     
