@@ -192,13 +192,16 @@ async def handle_url(message: types.Message):
 # =========================
 @dp.callback_query_handler(lambda c: c.data.startswith('quality_'))
 async def process_quality(callback: CallbackQuery):
+    # ВАЖНО: отвечаем на callback сразу!
+    await callback.answer()
+    
     user_id = callback.from_user.id
     quality = callback.data.replace('quality_', '')
     
     # Получаем URL пользователя
     url = user_urls.get(user_id)
     if not url:
-        await callback.answer("❌ Ссылка не найдена. Отправьте заново.")
+        await callback.message.edit_text("❌ Ссылка не найдена. Отправьте заново.")
         return
     
     await callback.message.edit_text("⏳ Скачиваю...")
@@ -211,26 +214,39 @@ async def process_quality(callback: CallbackQuery):
     
     # Формат для yt-dlp в зависимости от качества
     if quality == "audio":
+        # Только аудио
         format_str = "bestaudio/best"
-        template = f"{DOWNLOAD_DIR}/{user_id}_%(id)s.%(ext)s"
     elif quality == "360":
-        format_str = "bestvideo[height<=360]+bestaudio/best[height<=360]"
+        # 360p с запасными вариантами
+        format_str = "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=360]+bestaudio/best[height<=360]/best"
     elif quality == "720":
-        format_str = "bestvideo[height<=720]+bestaudio/best[height<=720]"
+        # 720p с запасными вариантами
+        format_str = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]/best"
     elif quality == "1080":
-        format_str = "bestvideo[height<=1080]+bestaudio/best[height<=1080]"
+        # 1080p с запасными вариантами
+        format_str = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
     else:  # best
-        format_str = "bestvideo+bestaudio/best"
+        # Лучшее качество с запасными вариантами
+        format_str = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
     
     # Команда для yt-dlp
     if is_instagram:
         cmd = [
             "yt-dlp", "--no-playlist",
             "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-            "-f", format_str,
+            "-f", format_str if quality != "best" else "best",
+            "-o", template, url
+        ]
+    elif is_shorts:
+        # Для Shorts упрощённый формат
+        cmd = [
+            "yt-dlp",
+            "-f", "best" if quality == "best" else format_str,
+            "--no-playlist",
             "-o", template, url
         ]
     else:
+        # Обычное видео
         cmd = [
             "yt-dlp",
             "-f", format_str,
