@@ -149,7 +149,7 @@ async def compress_video(input_path, output_path, target_mb):
 # =========================
 # КОМАНДЫ
 # =========================
-@dp.message_handler(commands=["start"])
+@dp.message_handler(commands=["start", "help"])
 async def start(message: types.Message):
     await message.answer(
         "👋 Привет! Отправь ссылку на видео\n\n"
@@ -166,18 +166,23 @@ async def start(message: types.Message):
 # =========================
 # ОБРАБОТКА ССЫЛКИ
 # =========================
-@dp.message_handler()
+@dp.message_handler(content_types=['text'])
 async def handle_url(message: types.Message):
+    # Игнорируем команды
+    if message.text.startswith('/'):
+        return
+    
     url = message.text.strip()
     user_id = message.from_user.id
     
     # Проверяем что это похоже на URL
-    if not any(domain in url.lower() for domain in ['youtube.', 'youtu.be', 'instagram.', 'tiktok.', 'facebook.', 'fb.watch', 'vk.com', 'twitter.', 'x.com']):
+    if not any(domain in url.lower() for domain in ['youtube.', 'youtu.be', 'instagram.', 'insta', 'tiktok.', 'facebook.', 'fb.watch', 'vk.com', 'twitter.', 'x.com', 'http']):
         await message.answer("❌ Это не похоже на ссылку на видео\nОтправьте ссылку с YouTube, Instagram, TikTok и т.д.")
         return
     
     # Сохраняем URL пользователя
     user_urls[user_id] = url
+    print(f"Saved URL for user {user_id}: {url}")  # Для отладки
     
     # Создаём меню выбора качества
     keyboard = InlineKeyboardMarkup(row_width=2)
@@ -216,8 +221,16 @@ async def process_quality(callback: CallbackQuery):
     try:
         # Получаем URL пользователя
         url = user_urls.get(user_id)
+        print(f"Retrieved URL for user {user_id}: {url}")  # Для отладки
+        
         if not url:
-            await callback.message.edit_text("❌ Ссылка потерялась. Отправьте заново.")
+            await callback.message.edit_text(
+                "❌ Ссылка потерялась. Отправьте заново.\n\n"
+                "Нажмите /start"
+            )
+            # Снимаем блокировку
+            if user_id in user_locks:
+                del user_locks[user_id]
             return
         
         # Удаляем меню с кнопками
@@ -320,11 +333,11 @@ async def process_quality(callback: CallbackQuery):
         
         # До 2 GB - отправляем как видео
         elif size_mb <= TELEGRAM_VIDEO_LIMIT:
-            await callback.message.edit_text(f"📤 Отправляю ({size_mb:.1f} MB)...")
-            
             # Конвертируем в правильный формат если нужно
             file_ext = os.path.splitext(file_path)[1].lower()
             if file_ext not in ['.mp4']:
+                await callback.message.edit_text(f"🔄 Конвертирую в MP4 ({size_mb:.1f} MB)...")
+                
                 converted_path = f"{DOWNLOAD_DIR}/{user_id}_converted.mp4"
                 
                 convert_cmd = [
@@ -346,6 +359,8 @@ async def process_quality(callback: CallbackQuery):
                 if conv_process.returncode == 0 and os.path.exists(converted_path):
                     file_path = converted_path
                     size_mb = os.path.getsize(file_path) / (1024 * 1024)
+            
+            await callback.message.edit_text(f"📤 Отправляю ({size_mb:.1f} MB)...")
             
             with open(file_path, "rb") as video:
                 await callback.message.answer_video(
