@@ -31,6 +31,8 @@ executor_pool = ThreadPoolExecutor(max_workers=3)
 
 # Храним выбор пользователей {user_id: url}
 user_urls = {}
+# Блокировка для предотвращения одновременных скачиваний
+user_locks = {}
 
 # =========================
 # GOOGLE DRIVE
@@ -169,13 +171,18 @@ async def handle_url(message: types.Message):
     url = message.text.strip()
     user_id = message.from_user.id
     
+    # Проверяем что это похоже на URL
+    if not any(domain in url.lower() for domain in ['youtube.', 'youtu.be', 'instagram.', 'tiktok.', 'facebook.', 'fb.watch', 'vk.com', 'twitter.', 'x.com']):
+        await message.answer("❌ Это не похоже на ссылку на видео\nОтправьте ссылку с YouTube, Instagram, TikTok и т.д.")
+        return
+    
     # Сохраняем URL пользователя
     user_urls[user_id] = url
     
     # Создаём меню выбора качества
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
-        InlineKeyboardButton("🎵 Только аудио", callback_data="quality_audio"),
+        InlineKeyboardButton("🎵 Аудио", callback_data="quality_audio"),
         InlineKeyboardButton("📱 360p", callback_data="quality_360"),
         InlineKeyboardButton("📺 720p", callback_data="quality_720"),
         InlineKeyboardButton("🖥️ 1080p", callback_data="quality_1080"),
@@ -198,15 +205,29 @@ async def process_quality(callback: CallbackQuery):
     user_id = callback.from_user.id
     quality = callback.data.replace('quality_', '')
     
-    # Получаем URL пользователя
-    url = user_urls.get(user_id)
-    if not url:
-        await callback.message.edit_text("❌ Ссылка не найдена. Отправьте заново.")
+    # Проверяем что пользователь не скачивает уже
+    if user_locks.get(user_id):
+        await callback.answer("⏳ Подожди, предыдущее скачивание ещё идёт!", show_alert=True)
         return
     
-    await callback.message.edit_text("⏳ Скачиваю...")
+    # Блокируем пользователя
+    user_locks[user_id] = True
     
-    template = f"{DOWNLOAD_DIR}/{user_id}_%(id)s.%(ext)s"
+    try:
+        # Получаем URL пользователя
+        url = user_urls.get(user_id)
+        if not url:
+            await callback.message.edit_text("❌ Ссылка потерялась. Отправьте заново.")
+            return
+        
+        # Удаляем меню с кнопками
+        try:
+            await callback.message.edit_text("⏳ Скачиваю...")
+        except:
+            # Если не получилось отредактировать - отправляем новое
+            await callback.message.answer("⏳ Скачиваю...")
+        
+        template = f"{DOWNLOAD_DIR}/{user_id}_%(id)s.%(ext)s"
     
     # Определяем платформу
     is_instagram = "instagram.com" in url.lower()
@@ -393,6 +414,16 @@ async def process_quality(callback: CallbackQuery):
         # Очищаем сохранённый URL
         if user_id in user_urls:
             del user_urls[user_id]
+        
+        # Снимаем блокировку
+        if user_id in user_locks:
+            del user_locks[user_id]
+    
+    except Exception as outer_error:
+        # На случай ошибки ВНЕ основного try
+        print(f"Outer error: {outer_error}")
+        if user_id in user_locks:
+            del user_locks[user_id]
 
 # =========================
 # ЗАПУСК
