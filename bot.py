@@ -228,55 +228,54 @@ async def process_quality(callback: CallbackQuery):
             await callback.message.answer("⏳ Скачиваю...")
         
         template = f"{DOWNLOAD_DIR}/{user_id}_%(id)s.%(ext)s"
-    
-    # Определяем платформу
-    is_instagram = "instagram.com" in url.lower()
-    is_shorts = "shorts" in url.lower() or "youtu.be" in url.lower()
-    
-    # Формат для yt-dlp в зависимости от качества
-    if quality == "audio":
-        # Только аудио
-        format_str = "bestaudio/best"
-    elif quality == "360":
-        # 360p с запасными вариантами
-        format_str = "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=360]+bestaudio/best[height<=360]/best"
-    elif quality == "720":
-        # 720p с запасными вариантами
-        format_str = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]/best"
-    elif quality == "1080":
-        # 1080p с запасными вариантами
-        format_str = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
-    else:  # best
-        # Лучшее качество с запасными вариантами
-        format_str = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
-    
-    # Команда для yt-dlp
-    if is_instagram:
-        cmd = [
-            "yt-dlp", "--no-playlist",
-            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-            "-f", format_str if quality != "best" else "best",
-            "-o", template, url
-        ]
-    elif is_shorts:
-        # Для Shorts упрощённый формат
-        cmd = [
-            "yt-dlp",
-            "-f", "best" if quality == "best" else format_str,
-            "--no-playlist",
-            "-o", template, url
-        ]
-    else:
-        # Обычное видео
-        cmd = [
-            "yt-dlp",
-            "-f", format_str,
-            "--merge-output-format", "mp4" if quality != "audio" else "m4a",
-            "--no-playlist",
-            "-o", template, url
-        ]
-    
-    try:
+        
+        # Определяем платформу
+        is_instagram = "instagram.com" in url.lower()
+        is_shorts = "shorts" in url.lower() or "youtu.be" in url.lower()
+        
+        # Формат для yt-dlp в зависимости от качества
+        if quality == "audio":
+            # Только аудио
+            format_str = "bestaudio/best"
+        elif quality == "360":
+            # 360p с запасными вариантами
+            format_str = "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=360]+bestaudio/best[height<=360]/best"
+        elif quality == "720":
+            # 720p с запасными вариантами
+            format_str = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+        elif quality == "1080":
+            # 1080p с запасными вариантами
+            format_str = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
+        else:  # best
+            # Лучшее качество с запасными вариантами
+            format_str = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
+        
+        # Команда для yt-dlp
+        if is_instagram:
+            cmd = [
+                "yt-dlp", "--no-playlist",
+                "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                "-f", format_str if quality != "best" else "best",
+                "-o", template, url
+            ]
+        elif is_shorts:
+            # Для Shorts упрощённый формат
+            cmd = [
+                "yt-dlp",
+                "-f", "best" if quality == "best" else format_str,
+                "--no-playlist",
+                "-o", template, url
+            ]
+        else:
+            # Обычное видео
+            cmd = [
+                "yt-dlp",
+                "-f", format_str,
+                "--merge-output-format", "mp4" if quality != "audio" else "m4a",
+                "--no-playlist",
+                "-o", template, url
+            ]
+        
         # Скачиваем
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -399,6 +398,9 @@ async def process_quality(callback: CallbackQuery):
     except asyncio.TimeoutError:
         await callback.message.edit_text("❌ Таймаут (10 мин)")
     
+    except asyncio.TimeoutError:
+        await callback.message.edit_text("❌ Таймаут (10 мин)")
+    
     except Exception as e:
         print(f"Ошибка: {e}")
         await callback.message.edit_text(f"❌ Ошибка: {str(e)[:200]}")
@@ -416,12 +418,6 @@ async def process_quality(callback: CallbackQuery):
             del user_urls[user_id]
         
         # Снимаем блокировку
-        if user_id in user_locks:
-            del user_locks[user_id]
-    
-    except Exception as outer_error:
-        # На случай ошибки ВНЕ основного try
-        print(f"Outer error: {outer_error}")
         if user_id in user_locks:
             del user_locks[user_id]
 
