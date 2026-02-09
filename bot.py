@@ -182,6 +182,11 @@ def clear_user_state(user_id: int):
 @dp.message_handler(commands=["start", "help"])
 async def start(message: types.Message):
     """Команда /start и /help"""
+    user_id = message.from_user.id
+    # Очищаем старое состояние при /start
+    clear_user_state(user_id)
+    await cleanup_user_files(user_id)
+    
     await message.answer(
         "👋 <b>Привет! Я скачиваю видео из соцсетей</b>\n\n"
         "📱 <b>Поддерживаю:</b>\n"
@@ -198,8 +203,21 @@ async def start(message: types.Message):
         "🎬 Видео в лучшем качестве\n"
         "🎵 Только аудио\n"
         "☁️ Большие файлы → GoFile/Drive\n\n"
-        "⚡ Быстро и просто!",
+        "⚡ Быстро и просто!\n\n"
+        "🔧 Команды:\n"
+        "/cancel - отменить текущее скачивание",
         parse_mode="HTML"
+    )
+
+@dp.message_handler(commands=["cancel"])
+async def cancel(message: types.Message):
+    """Команда /cancel - отмена скачивания"""
+    user_id = message.from_user.id
+    clear_user_state(user_id)
+    await cleanup_user_files(user_id)
+    await message.answer(
+        "✅ Скачивание отменено\n\n"
+        "Можешь отправить новую ссылку"
     )
 
 # =========================
@@ -244,7 +262,12 @@ async def handle_url(message: types.Message):
     
     user_id = message.from_user.id
     
-    # Сохраняем URL
+    # Очищаем старые файлы и блокировку при новой ссылке
+    await cleanup_user_files(user_id)
+    if user_id in user_locks:
+        del user_locks[user_id]
+    
+    # Сохраняем новый URL
     user_urls[user_id] = url
     print(f"✅ URL сохранён для пользователя {user_id}")
     
@@ -296,7 +319,9 @@ async def process_quality(callback: CallbackQuery):
                 "❌ Ссылка потерялась. Отправь её заново.\n\n"
                 "Нажми /start"
             )
-            clear_user_state(user_id)
+            # Очищаем всё состояние только при отсутствии URL
+            if user_id in user_locks:
+                del user_locks[user_id]
             return
         
         print(f"URL: {url}")
@@ -516,10 +541,13 @@ async def process_quality(callback: CallbackQuery):
             await callback.message.answer("❌ Произошла критическая ошибка")
     
     finally:
-        # Очистка
-        print("🧹 Очистка файлов и состояния...")
+        # Очистка только файлов и блокировки
+        print("🧹 Очистка файлов...")
         await cleanup_user_files(user_id)
-        clear_user_state(user_id)
+        # Снимаем блокировку
+        if user_id in user_locks:
+            del user_locks[user_id]
+        # URL НЕ удаляем - пусть остаётся для повторных попыток
         print("✅ Очистка завершена")
 
 # =========================
