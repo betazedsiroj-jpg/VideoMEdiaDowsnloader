@@ -157,10 +157,10 @@ async def start(message: types.Message):
         "• YouTube / Shorts\n"
         "• Instagram / Reels\n"
         "• TikTok / Facebook\n\n"
-        "🎬 Выбор качества: 360p, 720p, 1080p\n"
-        "🎵 Можно скачать только аудио\n"
+        "🎬 Видео в лучшем качестве\n"
+        "🎵 Или только аудио\n"
         "☁️ Большие файлы → GoFile\n\n"
-        "⚡ Качество на твой выбор!"
+        "⚡ Быстро и просто!"
     )
 
 # =========================
@@ -168,34 +168,72 @@ async def start(message: types.Message):
 # =========================
 @dp.message_handler(content_types=['text'])
 async def handle_url(message: types.Message):
+    print(f"=== NEW MESSAGE ===")
+    print(f"User ID: {message.from_user.id}")
+    print(f"Text: {message.text}")
+    print(f"Entities: {message.entities}")
+    
     # Игнорируем команды
-    if message.text.startswith('/'):
+    if message.text and message.text.startswith('/'):
+        print("Ignoring command")
         return
     
-    url = message.text.strip()
+    # Получаем URL из текста или из entities (когда шарят через "Поделиться")
+    url = None
+    
+    # Вариант 1: Прямой текст
+    if message.text:
+        url = message.text.strip()
+        print(f"URL from text: {url}")
+    
+    # Вариант 2: URL в entities (когда делятся через кнопку)
+    if message.entities:
+        print(f"Found {len(message.entities)} entities")
+        for i, entity in enumerate(message.entities):
+            print(f"Entity {i}: type={entity.type}, offset={entity.offset}, length={entity.length}")
+            
+            if entity.type in ['url', 'text_link']:
+                if entity.type == 'url':
+                    # Извлекаем URL из текста
+                    extracted_url = message.text[entity.offset:entity.offset + entity.length]
+                    url = extracted_url
+                    print(f"URL from entity (url): {url}")
+                elif entity.type == 'text_link':
+                    # URL в text_link
+                    url = entity.url
+                    print(f"URL from entity (text_link): {url}")
+                break
+    
+    if not url:
+        print("No URL found!")
+        await message.answer("❌ Не могу найти ссылку в сообщении")
+        return
+    
     user_id = message.from_user.id
     
     # Проверяем что это похоже на URL
-    if not any(domain in url.lower() for domain in ['youtube.', 'youtu.be', 'instagram.', 'insta', 'tiktok.', 'facebook.', 'fb.watch', 'vk.com', 'twitter.', 'x.com', 'http']):
-        await message.answer("❌ Это не похоже на ссылку на видео\nОтправьте ссылку с YouTube, Instagram, TikTok и т.д.")
+    supported_domains = ['youtube.', 'youtu.be', 'instagram.', 'insta', 'tiktok.', 'facebook.', 'fb.watch', 'fb.com', 'vk.com', 'twitter.', 'x.com', 'http']
+    is_supported = any(domain in url.lower() for domain in supported_domains)
+    
+    print(f"Is supported URL: {is_supported}")
+    
+    if not is_supported:
+        await message.answer("❌ Это не похоже на ссылку на видео\nПоддерживаю: YouTube, Instagram, TikTok, Facebook")
         return
     
     # Сохраняем URL пользователя
     user_urls[user_id] = url
-    print(f"Saved URL for user {user_id}: {url}")  # Для отладки
+    print(f"✅ Saved URL for user {user_id}: {url}")
     
     # Создаём меню выбора качества
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
-        InlineKeyboardButton("🎵 Аудио", callback_data="quality_audio"),
-        InlineKeyboardButton("📱 360p", callback_data="quality_360"),
-        InlineKeyboardButton("📺 720p", callback_data="quality_720"),
-        InlineKeyboardButton("🖥️ 1080p", callback_data="quality_1080"),
-        InlineKeyboardButton("⭐ Лучшее", callback_data="quality_best")
+        InlineKeyboardButton("🎬 Видео (лучшее)", callback_data="quality_best"),
+        InlineKeyboardButton("🎵 Аудио", callback_data="quality_audio")
     )
     
     await message.answer(
-        "🎯 Выбери качество:",
+        "🎯 Выбери формат:",
         reply_markup=keyboard
     )
 
@@ -318,6 +356,39 @@ async def process_quality(callback: CallbackQuery):
         
         file_path = files[0]
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        
+        # Проверяем есть ли видео поток в файле
+        has_video = False
+        try:
+            probe = await asyncio.create_subprocess_exec(
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=codec_type",
+                "-of", "csv=p=0",
+                file_path,
+                stdout=asyncio.subprocess.PIPE
+            )
+            stdout, _ = await probe.communicate()
+            has_video = b"video" in stdout
+        except:
+            # Если не удалось проверить - считаем что видео есть
+            has_video = True
+        
+        # Если НЕТ видео но пользователь выбрал видео качество - отправляем как аудио
+        if not has_video and quality != "audio":
+            await callback.message.edit_text(
+                f"⚠️ Видео недоступно, скачалось только аудио\n"
+                f"📤 Отправляю аудио ({size_mb:.1f} MB)..."
+            )
+            
+            with open(file_path, "rb") as audio:
+                await callback.message.answer_audio(
+                    audio,
+                    caption=f"🎵 Аудио (видео недоступно) | {size_mb:.1f} MB"
+                )
+            
+            await callback.message.delete()
+            return
         
         # Если аудио - отправляем как аудио
         if quality == "audio":
