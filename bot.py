@@ -564,6 +564,18 @@ async def errors_handler(update, exception):
 # =========================
 # ЗАПУСК
 # =========================
+async def on_startup(dp):
+    """Действия при запуске бота"""
+    print("🔧 Очистка webhook...")
+    await bot.delete_webhook(drop_pending_updates=True)
+    print("✅ Webhook очищен")
+
+async def on_shutdown(dp):
+    """Действия при остановке бота"""
+    print("🧹 Очистка сессий...")
+    await bot.close()
+    print("✅ Бот остановлен корректно")
+
 if __name__ == "__main__":
     print("=" * 50)
     print("🤖 BOT STARTING")
@@ -574,9 +586,16 @@ if __name__ == "__main__":
     print("=" * 50)
     
     try:
-        executor.start_polling(dp, skip_updates=True)
+        executor.start_polling(
+            dp, 
+            skip_updates=True,
+            on_startup=on_startup,
+            on_shutdown=on_shutdown
+        )
     except KeyboardInterrupt:
-        print("\n🛑 Бот остановлен")
+        print("\n🛑 Бот остановлен пользователем")
+    except Exception as e:
+        print(f"\n❌ Критическая ошибка: {e}")
     finally:
         executor_pool.shutdown(wait=True)
         print("👋 Завершение работы")
